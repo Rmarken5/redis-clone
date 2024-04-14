@@ -1,29 +1,42 @@
 package main
 
 import (
+	"bufio"
 	"net"
 )
 
+const bufferDelim = '\x00'
+
 type Peer struct {
 	conn    net.Conn
-	msgChan chan []byte
+	msgChan chan Message
 }
 
-func NewPeer(conn net.Conn, msgChan chan []byte) *Peer {
+func (p *Peer) Send(val []byte) error {
+	_, err := p.conn.Write(val)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
+func NewPeer(conn net.Conn, dataChan chan Message) *Peer {
 	return &Peer{
 		conn:    conn,
-		msgChan: msgChan,
+		msgChan: dataChan,
 	}
 }
 
 func (p *Peer) readLoop() error {
-	buff := make([]byte, 1024)
+	reader := bufio.NewReader(p.conn)
 	for {
-		n, err := p.conn.Read(buff)
+		b, err := reader.ReadBytes(bufferDelim)
 		if err != nil {
 			return err
 		}
-		p.msgChan <- buff[:n]
+		p.msgChan <- Message{
+			peer: p,
+			data: b,
+		}
 	}
 }

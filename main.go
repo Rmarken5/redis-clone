@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/rmarken5/redis-clone/client"
 	"log"
 	"log/slog"
@@ -11,13 +12,19 @@ import (
 
 const defaultAddress = ":5001"
 
+type Message struct {
+	data []byte
+	peer *Peer
+}
+
 type Server struct {
 	Config
 	peers     map[*Peer]bool
 	ln        net.Listener
 	addPeerCh chan *Peer
 	quitCh    chan struct{}
-	msgChan   chan []byte
+	msgChan   chan Message
+	kv        *KV
 }
 
 type Config struct {
@@ -33,7 +40,8 @@ func NewServer(cfg Config) *Server {
 		peers:     make(map[*Peer]bool),
 		addPeerCh: make(chan *Peer),
 		quitCh:    make(chan struct{}),
-		msgChan:   make(chan []byte),
+		msgChan:   make(chan Message),
+		kv:        NewKV(),
 	}
 }
 func (s *Server) Start() error {
@@ -49,15 +57,23 @@ func (s *Server) Start() error {
 
 }
 
-func (s *Server) handleRawMessage(rawMsg []byte) error {
-	slog.Info("Msg: ", string(rawMsg))
-	cmd, err := parseCommand(string(rawMsg))
+func (s *Server) handleMessage(msg Message) error {
+	cmd, err := parseCommand(string(msg.data))
 	if err != nil {
 		return err
 	}
 	switch v := cmd.(type) {
 	case SetCommand:
-		slog.Info("someone wants to set a key to the hash table", "key", v.key, "val", v.val)
+		return s.kv.Set(v.key, v.val)
+	case GetCommand:
+		val, ok := s.kv.Get(v.key)
+		if !ok {
+			return fmt.Errorf("key %s not in KV", v.key)
+		}
+		err = msg.peer.Send(val)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -65,8 +81,8 @@ func (s *Server) handleRawMessage(rawMsg []byte) error {
 func (s *Server) loop() {
 	for {
 		select {
-		case rawMsg := <-s.msgChan:
-			if err := s.handleRawMessage(rawMsg); err != nil {
+		case msg := <-s.msgChan:
+			if err := s.handleMessage(msg); err != nil {
 				slog.Error("raw message err", "err", err)
 			}
 		case peer := <-s.addPeerCh:
@@ -94,27 +110,32 @@ func (s *Server) acceptLoop() error {
 func (s *Server) HandleConnection(conn net.Conn) {
 	peer := NewPeer(conn, s.msgChan)
 	s.addPeerCh <- peer
+
 	if err := peer.readLoop(); err != nil {
 		slog.Error("error in read loop", "err", err)
 	}
+
 }
 
 func main() {
-
+	server := NewServer(Config{})
 	go func() {
-		server := NewServer(Config{})
 		log.Fatal(server.Start())
 	}()
 
 	time.Sleep(time.Second)
 
+	c := client.New("localhost:5001")
 	for i := 0; i < 10; i++ {
-		c := client.New("localhost:5001")
-
-		if err := c.Set(context.Background(), "foo", "bar"); err != nil {
+		if err := c.Set(context.Background(), fmt.Sprintf("foo_%d", i), fmt.Sprintf("bar_%d", i)); err != nil {
 			log.Fatal(err)
 		}
+		val, err := c.Get(context.Background(), fmt.Sprintf("foo_%d", i))
+		if err != nil {
+			log.Fatal(err)
+		}
+		slog.Info("GET", "val", val)
 	}
 
-	select {}
+	time.Sleep(time.Second)
 }
