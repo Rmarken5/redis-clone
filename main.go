@@ -1,10 +1,12 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"github.com/rmarken5/redis-clone/client"
 	"log"
 	"log/slog"
 	"net"
+	"time"
 )
 
 const defaultAddress = ":5001"
@@ -34,10 +36,6 @@ func NewServer(cfg Config) *Server {
 		msgChan:   make(chan []byte),
 	}
 }
-
-type Client struct {
-}
-
 func (s *Server) Start() error {
 	ln, err := net.Listen("tcp", s.ListenerAddress)
 	if err != nil {
@@ -52,8 +50,8 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) handleRawMessage(rawMsg []byte) error {
-	fmt.Println("Msg: " + string(rawMsg))
-	cmd, err := parseCommand(rawMsg)
+	slog.Info("Msg: ", string(rawMsg))
+	cmd, err := parseCommand(string(rawMsg))
 	if err != nil {
 		return err
 	}
@@ -87,6 +85,7 @@ func (s *Server) acceptLoop() error {
 			slog.Error("accept error", "err", err)
 			continue
 		}
+		slog.Info("new peer connected to server", conn.RemoteAddr().String())
 		go s.HandleConnection(conn)
 	}
 
@@ -95,14 +94,27 @@ func (s *Server) acceptLoop() error {
 func (s *Server) HandleConnection(conn net.Conn) {
 	peer := NewPeer(conn, s.msgChan)
 	s.addPeerCh <- peer
-
 	if err := peer.readLoop(); err != nil {
 		slog.Error("error in read loop", "err", err)
 	}
 }
 
 func main() {
-	server := NewServer(Config{})
-	log.Fatal(server.Start())
 
+	go func() {
+		server := NewServer(Config{})
+		log.Fatal(server.Start())
+	}()
+
+	time.Sleep(time.Second)
+
+	for i := 0; i < 10; i++ {
+		c := client.New("localhost:5001")
+
+		if err := c.Set(context.Background(), "foo", "bar"); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	select {}
 }
