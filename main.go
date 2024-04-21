@@ -1,19 +1,20 @@
 package main
 
 import (
-	"context"
+	"flag"
 	"fmt"
-	"github.com/rmarken5/redis-clone/client"
 	"log"
 	"log/slog"
 	"net"
-	"time"
 )
 
 const defaultAddress = ":5001"
 
+type Command interface {
+}
+
 type Message struct {
-	data []byte
+	cmd  Command
 	peer *Peer
 }
 
@@ -58,11 +59,7 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) handleMessage(msg Message) error {
-	cmd, err := parseCommand(string(msg.data))
-	if err != nil {
-		return err
-	}
-	switch v := cmd.(type) {
+	switch v := msg.cmd.(type) {
 	case SetCommand:
 		return s.kv.Set(v.key, v.val)
 	case GetCommand:
@@ -70,7 +67,7 @@ func (s *Server) handleMessage(msg Message) error {
 		if !ok {
 			return fmt.Errorf("key %s not in KV", v.key)
 		}
-		err = msg.peer.Send(val)
+		err := msg.peer.Send(val)
 		if err != nil {
 			return err
 		}
@@ -101,7 +98,6 @@ func (s *Server) acceptLoop() error {
 			slog.Error("accept error", "err", err)
 			continue
 		}
-		slog.Info("new peer connected to server", conn.RemoteAddr().String())
 		go s.HandleConnection(conn)
 	}
 
@@ -110,7 +106,6 @@ func (s *Server) acceptLoop() error {
 func (s *Server) HandleConnection(conn net.Conn) {
 	peer := NewPeer(conn, s.msgChan)
 	s.addPeerCh <- peer
-
 	if err := peer.readLoop(); err != nil {
 		slog.Error("error in read loop", "err", err)
 	}
@@ -118,24 +113,10 @@ func (s *Server) HandleConnection(conn net.Conn) {
 }
 
 func main() {
-	server := NewServer(Config{})
-	go func() {
-		log.Fatal(server.Start())
-	}()
-
-	time.Sleep(time.Second)
-
-	c := client.New("localhost:5001")
-	for i := 0; i < 10; i++ {
-		if err := c.Set(context.Background(), fmt.Sprintf("foo_%d", i), fmt.Sprintf("bar_%d", i)); err != nil {
-			log.Fatal(err)
-		}
-		val, err := c.Get(context.Background(), fmt.Sprintf("foo_%d", i))
-		if err != nil {
-			log.Fatal(err)
-		}
-		slog.Info("GET", "val", val)
-	}
-
-	time.Sleep(time.Second)
+	listenAddr := flag.String("listenAddr", defaultAddress, "listen address of the goredis server")
+	flag.Parse()
+	server := NewServer(Config{
+		ListenerAddress: *listenAddr,
+	})
+	log.Fatal(server.Start())
 }

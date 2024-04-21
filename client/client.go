@@ -5,7 +5,6 @@ import (
 	"context"
 	"github.com/tidwall/resp"
 	"io"
-	"log"
 	"net"
 )
 
@@ -14,16 +13,16 @@ type Client struct {
 	conn net.Conn
 }
 
-func New(addr string) *Client {
+func New(addr string) (*Client, error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	return &Client{
 		addr: addr,
 		conn: conn,
-	}
+	}, err
 }
 
 func (c *Client) Set(ctx context.Context, key string, val string) error {
@@ -37,7 +36,6 @@ func (c *Client) Set(ctx context.Context, key string, val string) error {
 	if err != nil {
 		return err
 	}
-	buf.WriteRune('\x00')
 
 	_, err = io.Copy(c.conn, buf)
 	return err
@@ -53,7 +51,6 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	buf.WriteRune('\x00')
 
 	_, err = io.Copy(c.conn, buf)
 
